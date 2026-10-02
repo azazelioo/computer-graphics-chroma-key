@@ -3,6 +3,7 @@ import json
 import math
 import os
 from pathlib import Path
+from fractions import Fraction
 import re
 import subprocess
 import threading
@@ -92,15 +93,26 @@ def upload():
         stream = next(s for s in info['streams'] if s['codec_type'] == 'video' and not s.get('disposition', {}).get('attached_pic'))
         if not set(info['format']['format_name'].split(',')) & {'mov', 'mp4', 'matroska', 'webm', 'avi', 'mpeg', 'mpegts'}:
             raise ValueError('Поддерживаются MP4, MOV, WebM, MKV, AVI и MPEG.')
-        duration = float(info['format']['duration'])
+        duration = float(stream.get('duration') or info['format']['duration'])
+        try:
+            fps = Fraction(stream.get('avg_frame_rate', '0/1'))
+        except (ValueError, ZeroDivisionError):
+            fps = Fraction(30)
+        if not 1 <= fps <= 120:
+            fps = Fraction(30)
+        audio = next((x for x in info['streams'] if x['codec_type'] == 'audio'), None)
+        audio_offset = float(audio.get('start_time', 0)) - float(stream.get('start_time', 0)) if audio else 0
         w, h = stream['width'], stream['height']
         if not math.isfinite(duration) or not 0 < duration <= 300 or w * h > 3840 * 2160:
             raise ValueError('Лимиты: 5 минут, разрешение до 3840×2160.')
+        sar = Fraction(stream.get('sample_aspect_ratio', '1:1').replace(':', '/')) if stream.get('sample_aspect_ratio') not in (None, 'N/A', '0:1') else Fraction(1)
+        if not 0.25 <= sar <= 4 or w * h * max(1, float(sar)) > 3840 * 2160:
+            raise ValueError('Слишком большой размер кадра с учётом пропорций пикселя.')
         # An auto-oriented frame defines display geometry, including phone rotation.
-        run(['ffmpeg', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-i', str(p / 'source'), '-frames:v', '1', str(p / 'frame.png')])
+        run(['ffmpeg', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-i', str(p / 'source'), '-map', f"0:{stream['index']}", '-vf', 'scale=trunc(iw*sar/2)*2:ih,setsar=1', '-frames:v', '1', str(p / 'frame.png')])
         with Image.open(p / 'frame.png') as frame:
             w, h = frame.size
-        meta = dict(id=ident, width=w, height=h, duration=duration, name=source.filename)
+        meta = dict(id=ident, width=w, height=h, duration=duration, name=source.filename, fps=str(fps), video_index=stream['index'], audio_offset=audio_offset)
         (p / 'meta.json').write_text(json.dumps(meta))
         return meta
     except (subprocess.SubprocessError, KeyError, StopIteration, OSError):
@@ -137,7 +149,7 @@ def command(p, data, out):
     meta = json.loads((p / 'meta.json').read_text())
     key = color(data.get('key', '#00ff00'))
     bg = color(data.get('background', '#284b70'))
-    similarity = number(data, 'similarity', .001, 1, .02)
+    similarity = number(data, 'similarity', .001, 1, .045)
     blend = number(data, 'blend', 0, 1, .01)
     mode = data.get('mode', 'color')
     if mode not in ('color', 'image'):
@@ -154,16 +166,23 @@ def command(p, data, out):
     duration = min(meta['duration'], 5) if preview else meta['duration']
     ratio = min(1, 960 / max(meta['width'], meta['height'])) if preview else 1
     w, h = max(2, int(meta['width'] * ratio) // 2 * 2), max(2, int(meta['height'] * ratio) // 2 * 2)
+    fps = meta.get('fps', '30')
+    offset = meta.get('audio_offset', 0)
+    audio_filter = 'asetpts=PTS-STARTPTS'
+    if offset > 0:
+        audio_filter += f',adelay={offset * 1000}:all=1'
+    elif offset < 0:
+        audio_filter = f'asetpts=PTS-STARTPTS,atrim=start={-offset},asetpts=PTS-STARTPTS'
     args = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-threads', '2', '-protocol_whitelist', 'file,pipe', '-i', str(p / 'source')]
     if mode == 'image':
-        args += ['-loop', '1', '-i', str(p / 'background.png')]
+        args += ['-loop', '1', '-framerate', fps, '-i', str(p / 'background.png')]
     else:
-        args += ['-f', 'lavfi', '-i', f'color=c={bg}:s={w}x{h}:r=30']
-    graph = (f'[0:v:0]setpts=PTS-STARTPTS,scale={w}:{h},setsar=1,format=yuva444p,'
+        args += ['-f', 'lavfi', '-i', f'color=c={bg}:s={w}x{h}:r={fps}']
+    graph = (f"[0:{meta.get('video_index', 0)}]setpts=PTS-STARTPTS,scale={w}:{h},setsar=1,format=yuva444p,"
              f'chromakey=color={key}:similarity={similarity}:blend={blend}{despill}[fg];'
              f'[1:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1[bg];'
              '[bg][fg]overlay=shortest=1:format=auto,format=yuv420p[out]')
-    args += ['-filter_complex_threads', '1', '-filter_complex', graph, '-map', '[out]', '-map', '0:a:0?', '-af', 'asetpts=PTS-STARTPTS',
+    args += ['-filter_complex_threads', '1', '-filter_complex', graph, '-map', '[out]', '-map', '0:a:0?', '-af', audio_filter,
              '-t', str(duration), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-threads', '2', '-c:a', 'aac', '-b:a', '192k',
              '-movflags', '+faststart', '-progress', 'pipe:1', str(out)]
     return args, duration
@@ -216,6 +235,8 @@ def result(ident):
     job = jobs.get(ident)
     if not job or job['state'] != 'done':
         return jsonify(error='Видео ещё не готово.'), 404
+    if not Path(job['path']).is_file():
+        return jsonify(error='Срок хранения результата истёк. Обработайте видео заново.'), 404
     return send_file(job['path'], mimetype='video/mp4', as_attachment='download' in request.args, download_name='chroma-key.mp4', conditional=True)
 
 
