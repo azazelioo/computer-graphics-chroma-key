@@ -1,0 +1,34 @@
+name: Tests and Docker
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -r requirements.txt pytest==9.0.2
+      - run: python -m pytest tests -q
+      - run: node --check static/app.js
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t chroma-key:test .
+      - run: docker run -d --name chroma-key --read-only --tmpfs /tmp:size=256m,mode=1777 --tmpfs /data:size=2g,mode=1777 --memory=2g --cap-drop=ALL --security-opt=no-new-privileges chroma-key:test
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec chroma-key python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/health')"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - run: docker exec -i chroma-key python < smoke.py
+      - if: always()
+        run: docker logs chroma-key
