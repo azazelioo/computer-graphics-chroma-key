@@ -1,0 +1,41 @@
+name: Publish assigned MIEM image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Configure temporary registry authentication
+        env:
+          REGISTRY_AUTH: ${{ secrets.KG4_TEMP_REGISTRY_AUTH }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path.home() / '.docker' / 'config.json'
+          p.parent.mkdir(exist_ok=True)
+          config = json.loads(p.read_text()) if p.exists() else {}
+          config.setdefault('auths', {})['registry.miem.hse.ru'] = {'auth': os.environ['REGISTRY_AUTH']}
+          p.write_text(json.dumps(config))
+          p.chmod(0o600)
+          PY
+      - name: Publish both architectures
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 --label org.opencontainers.image.source=https://git.miem.hse.ru/kg26-27/eabottaeva --label org.opencontainers.image.revision=ec8326f5f40562f08ac68785d3a23aee896dd310 --tag registry.miem.hse.ru/kg26-27/eabottaeva/chroma-key:submission-20261003 --push .
+      - name: Pull and verify the published image
+        run: |
+          docker pull registry.miem.hse.ru/kg26-27/eabottaeva/chroma-key:submission-20261003
+          docker run -d --name registry-check --read-only --tmpfs /tmp:size=256m,mode=1777 --tmpfs /data:size=2g,mode=1777 --memory=2g registry.miem.hse.ru/kg26-27/eabottaeva/chroma-key:submission-20261003
+          docker exec -i registry-check python < smoke.py
+          docker exec -i registry-check python < scripts/verify_unseen.py
+          docker buildx imagetools inspect registry.miem.hse.ru/kg26-27/eabottaeva/chroma-key:submission-20261003
+      - if: always()
+        run: |
+          docker rm -f registry-check || true
+          docker logout registry.miem.hse.ru
