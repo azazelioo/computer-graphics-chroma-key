@@ -30,5 +30,6 @@ jobs:
           done
           exit 1
       - run: docker exec -i chroma-key python < smoke.py
+      - run: docker exec -i chroma-key python < scripts/verify_unseen.py
       - if: always()
         run: docker logs chroma-key

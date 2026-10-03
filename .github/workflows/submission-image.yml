@@ -17,6 +17,7 @@ jobs:
           docker load -i outputs/chroma-key-amd64.tar.gz
           docker run -d --name submission-test --read-only --tmpfs /tmp:size=256m,mode=1777 --tmpfs /data:size=2g,mode=1777 --memory=2g kg-chroma-key:submission-20261003
           docker exec -i submission-test python < smoke.py
+          docker exec -i submission-test python < scripts/verify_unseen.py
       - name: Publish downloadable image
         env:
           GH_TOKEN: ${{ github.token }}
