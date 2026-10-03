@@ -1,0 +1,35 @@
+name: Verify published Docker image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the published submission package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p outputs/release
+          gh release download submission-20261003 --pattern 'chroma-key-amd64.tar.gz*' --pattern compose.image.yaml --dir outputs/release
+          cd outputs/release
+          sha256sum -c chroma-key-amd64.tar.gz.sha256
+          docker load -i chroma-key-amd64.tar.gz
+          docker compose -f compose.image.yaml up -d --wait --wait-timeout 90
+      - name: Verify source matches the published image
+        run: |
+          docker compose -f outputs/release/compose.image.yaml cp web:/app/server.py /tmp/published-server.py
+          docker compose -f outputs/release/compose.image.yaml cp web:/app/static /tmp/published-static
+          cmp server.py /tmp/published-server.py
+          diff -r static /tmp/published-static
+      - name: Exercise real video processing in the downloaded image
+        run: |
+          docker compose -f outputs/release/compose.image.yaml exec -T web python < smoke.py
+          docker compose -f outputs/release/compose.image.yaml exec -T web python < scripts/verify_unseen.py
+      - if: always()
+        run: docker compose -f outputs/release/compose.image.yaml logs
+      - if: always()
+        run: docker compose -f outputs/release/compose.image.yaml down -v
