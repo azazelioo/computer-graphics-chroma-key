@@ -1,5 +1,7 @@
 # ДЗ 4 — удаление и замена фона видео
 
+**Для проверяющего: [готовый Docker Image и Compose доступны в релизе](https://github.com/azazelioo/computer-graphics-chroma-key/releases/tag/submission-20261003).** Скачайте `chroma-key-amd64.tar.gz` и `compose.image.yaml`, выполните `docker load -i chroma-key-amd64.tar.gz`, затем `docker compose -f compose.image.yaml up -d --wait`. Сборка исходников не требуется. Подробности и ограничение по месту учебной сдачи — ниже.
+
 Веб-приложение для удаления однотонного фона из видео и замены на цвет или изображение. Python, Flask и FFmpeg; запуск в Docker.
 
 ## Запуск в Docker
