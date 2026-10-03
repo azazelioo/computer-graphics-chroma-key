@@ -81,3 +81,18 @@ python -m pytest tests -q
 ## Соответствие заданию
 
 [Подробный аудит требований, тесты и ограничения](docs/requirements-audit.md). Расширенный набор: 20 тестов, включая синхронизацию аудио, дробную частоту кадров, поворот видео и реальные цвета пикселей.
+
+## Готовый Docker Image для передачи проверяющему
+
+[Релиз с Docker-образом](https://github.com/azazelioo/computer-graphics-chroma-key/releases/tag/submission-20261003) содержит `chroma-key-amd64.tar.gz`, контрольную сумму и `compose.image.yaml`. Это готовый образ для обычного компьютера Linux/Windows/Intel Mac с Docker; Dockerfile у проверяющего собирать не требуется:
+
+```sh
+docker load -i chroma-key-amd64.tar.gz
+docker compose -f compose.image.yaml up -d --wait
+```
+
+Открыть http://localhost:8004. Для ARM64 можно собрать отдельный архив: `bash scripts/export-image.sh linux/arm64`. Обычный `compose.yaml` по-прежнему служит для сборки из исходников.
+
+**Требование курса о месте сдачи:** GitHub — дополнительная копия проекта. Код, архив Docker Image и Compose нужно разместить в назначенном GitLab МИЭМ. Репозиторий для темы 4 пока не указан; не подменяйте им репозиторий темы 16 без согласования с преподавателем.
+
+[Объяснение метода и кода для защиты](docs/defense.md). Выбор темы ботом и умение объяснить код — действия студента; автоматическая проверка программы их не подтверждает.
